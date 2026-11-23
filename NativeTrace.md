@@ -131,3 +131,80 @@ and local player check prevents remote recall from consuming the gesture.
 The gesture uses a 350 ms interval. Ctrl assignment and single taps
 follow the original dispatch. Both hook thunks retain two-argument
 thiscall stack cleanup.
+
+## Bitmap font format
+
+The stock data/fonts directory contains eight MVOSFONT .mft files.
+The Steam x86 loader at VA 0x0054C170 checks the eight-byte magic
+through 0x0054CA90 and handles single- and multi-palette variants.
+The decoder at 0x0054CAE0 reads 256 glyph records at file offset 12,
+each containing a 32-bit data offset and 16-bit width and height.
+It registers each width and height with the native sprite/font system.
+The existing mod uses the stock draw and measure functions. A same-size
+replacement can preserve layout. Larger glyph records affect native
+metrics. A sharper output-resolution font path needs separate raster
+dimensions and logical measurements. No font assets were changed.
+
+### Independent province rendering prototype
+
+The province screen loop at VA 0x004F8D10 calls the tick worker
+0x004D5BF0 at VA 0x004F9075, then the end-frame routine 0x0054F3E0
+at VA 0x004F90D9. The tick worker waits at VA 0x004D5CF3 before incrementing
+the province counter. Stock end-frame does more than draw. It calls
+0x00550130, which handles queued keyboard and mouse input and dispatches
+an engine event before presenting. Re-entering end-frame between ticks
+would therefore also change the input and event cadence.
+
+The isolated work/fps-probe build records the active UI controller at
+the original end-frame call and leaves that call in place. During the
+stock wait it tries the narrower paint/present path using root dirty
+marking (VA 0x0054EEC0), tree paint (VA 0x0054EEF0), and graphics present
+(VA 0x0054B4A0). It keeps the original wait deadline and leaves the tick
+counter and all game update calls in their original positions. This
+first experiment redraws snapshots. It does not interpolate the camera
+or implement a fixed 30 FPS cap, 60 FPS, or a settings control.
+
+The isolated straight-pan comparison recorded 11.796 world draws/s and
+11.796 simulation ticks/s in stock. The probe recorded 34.846 world
+draws/s and 11.803 simulation ticks/s. Camera movements still occurred
+at about 11.8 Hz in both builds. The extra snapshot path is observable
+without a measured change to the tick rate in this sample. Presentation
+cadence at the display, gameplay equivalence beyond the tick counter,
+steady frame pacing, and intermediate visual camera positions remain
+unverified.
+
+### Interpolated 30 Hz presentation probe
+
+The isolated work/fps-interpolation build captures consecutive province
+camera positions at the stock end-frame call. The scheduled paint pass
+temporarily interpolates between those snapshots and restores the
+simulation camera before presenting. The stock end-frame still runs its
+input and event processing. Only its graphics present call at VA
+0x00550237 is suppressed while the independent schedule is active.
+The interpolation trails by about one simulation tick.
+
+Straight and diagonal harness captures measured 29.991 and 30.008
+graphics present calls/s and 11.883 and 11.890 simulation ticks/s.
+Typical horizontal camera advances fell from 31 to 12 pixels.
+A separate desktop pixel sample during a straight pan measured 11.33
+visible changes/s in stock and 27.54 changes/s with interpolation.
+The latter captures changes in a sampled region of the desktop image,
+not hardware scanout. The prototype is limited to Normal View.
+Hit testing with the interpolated camera, 60 Hz scheduling and the
+native settings control remain outside this probe.
+
+### Frame-rate selector and 144 Hz measurement
+
+The development build uses the native settings panel and persists
+FrameRate=0, 30, 60, or 144 in Options.ini. After zoom correction, the
+viewport point hook adds the difference between the last submitted
+camera and the authoritative camera. A live 60 FPS pan with mouse input
+observed nonzero offsets up to 38 pixels. The stock simulation camera
+is restored around every extra paint. The probe records submitted frame
+positions at VA 0x006C3F80 for local profiling.
+
+After selecting 144 FPS and restarting, the completed-present counter
+measured about 142.17 submissions/s while the province tick counter
+measured 11.74 ticks/s. The short run's median horizontal camera step
+was two pixels. The 144 Hz trace counts skipped polling samples using
+the wrapping submission counter. No hardware scanout rate is claimed.

@@ -154,3 +154,21 @@ The builder relocates its mod import tables to make room for the new
 exports. Double-tap the same top-row group digit within 350 ms to recall
 and focus the commander, or the first live member. Ctrl+number still
 assigns the group. No game assets or new settings files are required.
+
+## Normal View frame-rate setting
+
+The DLL and executable builder must be updated together. The builder
+redirects the province wait at RVA 0xD5CF3, province end frame at RVA
+0xF90D9, and stock end-frame graphics present call at RVA 0x150237.
+The Frame Rate button in native Game Settings cycles Original, 30 FPS,
+60 FPS, and 144 FPS. It persists in Options.ini as FrameRate (0, 30,
+60, or 144). Original is the default. The setting applies to Normal
+View. Other camera modes and dialogs use stock presentation.
+
+The isolated harness confirmed that 60 and 144 persist across a restart.
+The 144 setting produced about 142 graphics submissions/s and about
+11.74 province ticks/s during a straight pan. This is a target and is
+subject to machine and display limits. Pointer events were observed
+receiving the displayed-camera offset while panning at 60 FPS. Exact
+unit selection and order destinations at zoom limits still need
+end-to-end checks.

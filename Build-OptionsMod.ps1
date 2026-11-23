@@ -278,4 +278,25 @@ foreach ($index in 3,4) {
 }
 Install-CallRedirect 0xfaa64 0xdd170 0xd00
 Install-CallRedirect 0xd7f23 0xc8c70 0xd40
+foreach ($hook in @(
+    @{Name='TheocracyProbeWait'; Symbol=0xa60; Index=36; Site=0xd5cf3; Target=0x15b9e0; Stub=0xd80},
+    @{Name='TheocracyProbePresent'; Symbol=0xa80; Index=40; Site=0xf90d9; Target=0x14f3e0; Stub=0xdc0},
+    @{Name='TheocracyProbeFlip'; Symbol=0xaa0; Index=44; Site=0x150237; Target=0x14b4a0; Stub=0xe00}
+)){
+    [Text.Encoding]::ASCII.GetBytes($hook.Name).CopyTo($patched, ($raw+$hook.Symbol+2))
+    Set-Int32 ($raw+$lookupTable+$hook.Index) ($rva+$hook.Symbol)
+    Set-Int32 ($raw+$addressTable+$hook.Index) ($rva+$hook.Symbol)
+    $iat=[BitConverter]::GetBytes([int]($baseAddress+$rva+$addressTable+$hook.Index))
+    $code=[Collections.Generic.List[byte]]::new()
+    if ($hook.Index -eq 36) {
+        $code.AddRange([byte[]](0xff,0x25))
+        $code.AddRange($iat)
+    } else {
+        $code.AddRange([byte[]](0x51,0xff,0x15))
+        $code.AddRange($iat)
+        $code.AddRange([byte[]](0x83,0xc4,4,0xc3))
+    }
+    $code.CopyTo($patched, ($raw+$hook.Stub))
+    Install-CallRedirect $hook.Site $hook.Target $hook.Stub
+}
 [IO.File]::WriteAllBytes($output, $patched)

@@ -42,8 +42,8 @@ typedef GamePoint *(__cdecl *MeasureText)(GamePoint *, void *, const char *);
 
 enum {
     SKIP_VIDEOS = 1200, MOUSE_SLIDER, SWITCH_SETTINGS_PAGE,
-    RESET_BINDS, BINDING_ROW = 1300,
-    MOUSE_SLIDER_Y = 191, CD_TRACKS_Y = 228, SKIP_VIDEOS_Y = 262
+    RESET_BINDS, FRAME_RATE, BINDING_ROW = 1300,
+    MOUSE_SLIDER_Y = 191, CD_TRACKS_Y = 228, SKIP_VIDEOS_Y = 262, FRAME_RATE_Y = 322
 };
 
 static SharedOptions *const shared = (SharedOptions *)0x006c3f00;
@@ -96,6 +96,19 @@ static void *use_title_scroll_settings(void) {
 }
 static void *panel_vtable[6];
 static LONG draft_mouse;
+static unsigned frame_rate, draft_frame_rate;
+static unsigned char frame_rate_button[0xe0] __attribute__((aligned(4)));
+
+static unsigned valid_frame_rate(unsigned value) {
+    return value == 30 || value == 60 || value == 144 ? value : 0;
+}
+
+static const char *frame_rate_caption(unsigned value) {
+    if (value == 30) return "Frame Rate: 30 FPS";
+    if (value == 60) return "Frame Rate: 60 FPS";
+    if (value == 144) return "Frame Rate: 144 FPS";
+    return "Frame Rate: Original";
+}
 static BOOL save_failed;
 static char mouse_label[48];
 
@@ -118,6 +131,7 @@ __declspec(dllexport) int __cdecl TheocracyOptions(void) {
     if (!get_mod_path(path, L"Options.ini")) return 0;
     shared->mouse_percent = read_percent(path, L"MouseSpeed");
     read_bindings();
+    frame_rate = valid_frame_rate(GetPrivateProfileIntW(L"Options", L"FrameRate", 0, path));
 
     return GetPrivateProfileIntW(L"Options", L"SkipOpeningVideos", 0, path) == 1;
 }
@@ -128,11 +142,13 @@ static BOOL save_options(void) {
     int next = wsprintfW(values, L"MouseSpeed=%ld", draft_mouse) + 1;
 
     next += wsprintfW(values + next, L"SkipOpeningVideos=%d", !!((ReadGem)0x00451f90)(skip_gem)) + 1;
+    next += wsprintfW(values + next, L"FrameRate=%u", draft_frame_rate) + 1;
     values[next] = 0;
     if (!WritePrivateProfileSectionW(L"Options", values, path)) return FALSE;
     shared->mouse_x_remainder = 0;
     shared->mouse_y_remainder = 0;
     shared->mouse_percent = draft_mouse;
+    frame_rate = draft_frame_rate;
 
     return TRUE;
 }
@@ -659,6 +675,7 @@ static void __thiscall options_draw(void *panel, void *surface,
 static void * __thiscall destroy_options(void *panel, unsigned flags) {
     for (size_t i = 0; i < binding_count; ++i) ((GameMethod)0x005511a0)(row_buttons[i]);
     ((GameMethod)0x005511a0)(reset_button);
+    ((GameMethod)0x005511a0)(frame_rate_button);
     ((GameMethod)0x005511a0)(page_button);
     ((GameMethod)0x00450a50)(mouse_slider);
     ((GameMethod)0x005511a0)(skip_gem);
@@ -690,6 +707,12 @@ static void __thiscall options_event(void *panel, const GameEvent *event) {
     const unsigned command = *(unsigned short *)((unsigned char *)event->control + 0x38);
     if (command == SWITCH_SETTINGS_PAGE) {
         change_page(panel);
+        return;
+    }
+    if (!controls_page && command == FRAME_RATE) {
+        draft_frame_rate = draft_frame_rate == 0 ? 30 : draft_frame_rate == 30 ? 60 : draft_frame_rate == 60 ? 144 : 0;
+        ((SetPointer)0x00456c20)(frame_rate_button, frame_rate_caption(draft_frame_rate));
+        ((GameMethod)0x0054eec0)(panel);
         return;
     }
     if (controls_page && command == RESET_BINDS) {
@@ -725,6 +748,7 @@ static void attach_options(void *panel) {
     options_panel = panel;
     WCHAR path[MAX_PATH];
     draft_mouse = shared->mouse_percent;
+    draft_frame_rate = frame_rate;
     BOOL skip = get_mod_path(path, L"Options.ini") &&
         GetPrivateProfileIntW(L"Options", L"SkipOpeningVideos", 0, path) == 1;
     save_failed = FALSE;
@@ -769,6 +793,9 @@ static void attach_options(void *panel) {
     ((SetPointer)0x00551440)(page_button, (void *)0x006109c8);
     ((SetPointer)0x0044bed0)(panel, page_button);
     void *font = (void *)0x00612a88;
+    const GameRect frame_rate_bounds = {39, FRAME_RATE_Y, 172, 19};
+    register_button(panel, frame_rate_button, &frame_rate_bounds, font,
+                    frame_rate_caption(draft_frame_rate), FRAME_RATE);
     const GameRect reset_bounds = {42, -800, 158, 22};
     register_button(panel, reset_button, &reset_bounds, font, "Revert to Default", RESET_BINDS);
     for (size_t i = 0; i < binding_count; ++i) {
@@ -853,6 +880,10 @@ static void *zoom_viewport;
 static int zoom_distance = 100;
 static int zoom_wheel_remainder;
 static int zoom_left, zoom_top, zoom_width, zoom_height;
+static void *probe_visible_province;
+static GamePoint probe_visible_camera;
+static BOOL probe_rendering;
+static void probe_align_point(void *viewport, GamePoint *point);
 static int zoom_view_width, zoom_view_height;
 static unsigned short *zoom_pixels;
 static SIZE_T zoom_capacity;
@@ -914,6 +945,7 @@ __declspec(dllexport) GamePoint *__cdecl TheocracyZoomPoint(void *viewport, Game
         point->x = point->x * zoom_width / zoom_view_width + zoom_left;
         point->y = point->y * zoom_height / zoom_view_height + zoom_top;
     }
+    probe_align_point(viewport, point);
     return point;
 }
 
@@ -1023,4 +1055,142 @@ __declspec(dllexport) void __cdecl TheocracyZoomDraw(
     zoom_height = height;
     zoom_view_width = original.width;
     zoom_view_height = original.height;
+}
+
+
+/* Isolated 30 Hz presentation probe. Only the province main thread uses these. */
+static unsigned char *probe_ui;
+static unsigned char *probe_province;
+static BOOL probe_skip_stock_present;
+static GamePoint probe_previous, probe_current;
+static LONGLONG probe_snapshot_time, probe_next_present;
+
+typedef struct {
+    volatile unsigned char submitted;
+    unsigned char padding[3];
+    volatile LONG x, y;
+    volatile LONG pointer_delta_x, pointer_delta_y;
+    volatile LONG pointer_samples;
+} ProbePresentation;
+
+static ProbePresentation *const probe_metrics = (ProbePresentation *)0x006c3f80;
+
+static void probe_align_point(void *viewport, GamePoint *point) {
+    unsigned char *province = *(void **)0x006a42a8;
+    if (!province || probe_visible_province != province || probe_rendering ||
+        *(void **)(province + 0x40daf) != viewport || *(int *)(province + 0x40b17) != 0)
+        return;
+    const GamePoint *camera = (const GamePoint *)(province + 0x40da7);
+    LONG dx = probe_visible_camera.x - camera->x;
+    LONG dy = probe_visible_camera.y - camera->y;
+    point->x += dx;
+    point->y += dy;
+    probe_metrics->pointer_delta_x = dx;
+    probe_metrics->pointer_delta_y = dy;
+    ++probe_metrics->pointer_samples;
+}
+
+static LONGLONG probe_clock(void) {
+    LARGE_INTEGER now;
+    QueryPerformanceCounter(&now);
+    return now.QuadPart;
+}
+
+__declspec(dllexport) void __cdecl TheocracyProbeFlip(void *graphics) {
+    if (!probe_skip_stock_present) ((GameMethod)0x0054b4a0)(graphics);
+}
+
+static BOOL probe_active(unsigned char *province) {
+    void *engine = *(void **)0x006c030c;
+    return frame_rate && province && engine && *(void **)(province + 0x40daf) &&
+           *(int *)(province + 0x40b17) == 0 && !shared->title_active && !has_modal(engine);
+}
+
+__declspec(dllexport) void __cdecl TheocracyProbePresent(unsigned char *ui) {
+    unsigned char *province = *(void **)0x006a42a8;
+    BOOL active = probe_active(province);
+    if (!active || probe_province != province || probe_ui != ui) {
+        probe_next_present = 0;
+        probe_province = active ? province : NULL;
+        probe_ui = active ? ui : NULL;
+        if (active) probe_current = *(GamePoint *)(province + 0x40da7);
+    }
+    if (active) {
+        probe_previous = probe_current;
+        probe_current = *(GamePoint *)(province + 0x40da7);
+        probe_snapshot_time = probe_clock();
+    }
+    probe_skip_stock_present = active && probe_next_present != 0;
+    if (!probe_skip_stock_present) probe_visible_province = NULL;
+    ((GameMethod)0x0054f3e0)(ui);
+    probe_skip_stock_present = FALSE;
+}
+
+static LONG probe_interpolate(LONG from, LONG to, LONGLONG elapsed, LONGLONG interval) {
+    return from + (LONG)((to - from) * elapsed / interval);
+}
+
+__declspec(dllexport) void __cdecl TheocracyProbeWait(unsigned microseconds) {
+    typedef void (__cdecl *Wait)(unsigned);
+    typedef void *(__thiscall *GetSurface)(void *);
+    typedef void (__thiscall *Paint)(void *, void *);
+    typedef void *(__cdecl *GetGraphics)(void);
+    Wait native_wait = (Wait)0x0055b9e0;
+    unsigned char *province = *(void **)0x006a42a8;
+    if (!probe_ui || probe_province != province || !probe_active(province)) {
+        probe_next_present = 0;
+        probe_visible_province = NULL;
+        native_wait(microseconds);
+        return;
+    }
+    LARGE_INTEGER frequency;
+    QueryPerformanceFrequency(&frequency);
+    LONGLONG now = probe_clock();
+    LONGLONG deadline = now + microseconds * frequency.QuadPart / 1000000;
+    LONGLONG interval = frequency.QuadPart / frame_rate;
+    LONGLONG tick_interval = frequency.QuadPart / 12;
+    LONGLONG guard = frequency.QuadPart / (frame_rate == 144 ? 500 : 250);
+    void *root = *(void **)(probe_ui + 0x14);
+    void *graphics = ((GetGraphics)0x00485c10)();
+    if (!root || !graphics) {
+        probe_next_present = 0;
+        probe_visible_province = NULL;
+        native_wait(microseconds);
+        return;
+    }
+    if (!probe_next_present || now - probe_next_present >= interval)
+        probe_next_present = now + interval;
+    while (probe_next_present + guard < deadline) {
+        LONGLONG remaining = probe_next_present - probe_clock();
+        if (remaining > 0) native_wait((unsigned)(remaining * 1000000 / frequency.QuadPart));
+        now = probe_clock();
+        if (deadline - now < guard) break;
+        void *surface = ((GetSurface)0x005527b0)(graphics);
+        if (!surface) {
+            probe_next_present = 0;
+            break;
+        }
+        LONGLONG elapsed = now - probe_snapshot_time;
+        if (elapsed < 0) elapsed = 0;
+        if (elapsed > tick_interval) elapsed = tick_interval;
+        GamePoint *camera = (GamePoint *)(province + 0x40da7);
+        GamePoint original = *camera;
+        camera->x = probe_interpolate(probe_previous.x, probe_current.x, elapsed, tick_interval);
+        camera->y = probe_interpolate(probe_previous.y, probe_current.y, elapsed, tick_interval);
+        probe_rendering = TRUE;
+        ((GameMethod)0x0054eec0)(root);
+        ((Paint)0x0054eef0)(root, surface);
+        probe_metrics->x = camera->x;
+        probe_metrics->y = camera->y;
+        probe_visible_camera = *camera;
+        *camera = original;
+        probe_rendering = FALSE;
+        ((GameMethod)0x0054b4a0)(graphics);
+        probe_visible_province = province;
+        ++probe_metrics->submitted;
+        probe_next_present += interval;
+        if (probe_clock() - probe_next_present >= interval) break;
+    }
+    LONGLONG remaining = deadline - probe_clock();
+    if (remaining > 0) native_wait((unsigned)(remaining * 1000000 / frequency.QuadPart));
 }
