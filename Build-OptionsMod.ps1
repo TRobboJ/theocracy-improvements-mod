@@ -109,7 +109,7 @@ while ([BitConverter]::ToInt32($stock, ($oldImports + $at + 12)) -ne 0) {
 $moduleName = 0x800
 $symbolName = 0x900
 $lookupTable = 0xc00
-$addressTable = 0xc40
+$addressTable = 0xc50
 $modulePath = 'Theocracy Improvements Mod\TheocracyOptions.dll'
 [Text.Encoding]::ASCII.GetBytes($modulePath).CopyTo($patched, ($raw + $moduleName))
 [Text.Encoding]::ASCII.GetBytes('TheocracyOptions').CopyTo($patched, ($raw + $symbolName + 2))
@@ -281,7 +281,10 @@ Install-CallRedirect 0xd7f23 0xc8c70 0xd40
 foreach ($hook in @(
     @{Name='TheocracyProbeWait'; Symbol=0xa60; Index=36; Site=0xd5cf3; Target=0x15b9e0; Stub=0xd80},
     @{Name='TheocracyProbePresent'; Symbol=0xa80; Index=40; Site=0xf90d9; Target=0x14f3e0; Stub=0xdc0},
-    @{Name='TheocracyProbeFlip'; Symbol=0xaa0; Index=44; Site=0x150237; Target=0x14b4a0; Stub=0xe00}
+    @{Name='TheocracyProbeFlip'; Symbol=0xaa0; Index=44; Site=0x150237; Target=0x14b4a0; Stub=0xe00},
+    @{Name='TheocracyFrameDrawCursor'; Symbol=0xac0; Index=48; Site=0x15022b; Target=0x163590; Stub=0xe40},
+    @{Name='TheocracyFrameRestoreCursor'; Symbol=0xae0; Index=52; Site=0x150266; Target=0x1635d0; Stub=0xe80},
+    @{Name='TheocracyFrameRefreshCursor'; Symbol=0x980; Index=56; Site=0x14f6a1; Target=0x163670; Stub=0xec0}
 )){
     [Text.Encoding]::ASCII.GetBytes($hook.Name).CopyTo($patched, ($raw+$hook.Symbol+2))
     Set-Int32 ($raw+$lookupTable+$hook.Index) ($rva+$hook.Symbol)
@@ -299,4 +302,19 @@ foreach ($hook in @(
     $code.CopyTo($patched, ($raw+$hook.Stub))
     Install-CallRedirect $hook.Site $hook.Target $hook.Stub
 }
+$provinceModeSymbol = 0x840
+$provinceModeIndex = 60
+[Text.Encoding]::ASCII.GetBytes('TheocracyProvinceMode').CopyTo($patched, ($raw + $provinceModeSymbol + 2))
+Set-Int32 ($raw + $lookupTable + $provinceModeIndex) ($rva + $provinceModeSymbol)
+Set-Int32 ($raw + $addressTable + $provinceModeIndex) ($rva + $provinceModeSymbol)
+$provinceModeStub = 0xbc0
+$code = [Collections.Generic.List[byte]]::new()
+for ($argument = 0; $argument -lt 3; ++$argument) {
+    $code.AddRange([byte[]](0xff,0x74,0x24,12))
+}
+$code.AddRange([byte[]](0x51,0xff,0x15))
+$code.AddRange([BitConverter]::GetBytes([int]($baseAddress + $rva + $addressTable + $provinceModeIndex)))
+$code.AddRange([byte[]](0x83,0xc4,16,0xc2,12,0))
+$code.CopyTo($patched, ($raw + $provinceModeStub))
+Install-CallRedirect 0x94454 0x94cf0 $provinceModeStub
 [IO.File]::WriteAllBytes($output, $patched)

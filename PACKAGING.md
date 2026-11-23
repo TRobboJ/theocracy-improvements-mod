@@ -172,3 +172,16 @@ subject to machine and display limits. Pointer events were observed
 receiving the displayed-camera offset while panning at 60 FPS. Exact
 unit selection and order destinations at zoom limits still need
 end-to-end checks.
+
+## Wide Viewport
+
+The native Game Settings button saves `WideViewport=0` or `1` in
+`Options.ini`. The default is Off. Restart the game after changing it
+so the province display mode can be created at the new width.
+
+Ship the rebuilt DLL with its matching builder. The builder redirects
+the province display descriptor constructor at RVA `0x94454`. The DLL
+uses the primary desktop aspect ratio and retains the 600-pixel
+logical height. In the province, the Space panel and right-edge scroll
+trigger follow the new width. The existing top and bottom art keeps
+its native size. There are no new packaged assets for this feature.

@@ -42,8 +42,10 @@ typedef GamePoint *(__cdecl *MeasureText)(GamePoint *, void *, const char *);
 
 enum {
     SKIP_VIDEOS = 1200, MOUSE_SLIDER, SWITCH_SETTINGS_PAGE,
-    RESET_BINDS, FRAME_RATE, BINDING_ROW = 1300,
-    MOUSE_SLIDER_Y = 191, CD_TRACKS_Y = 228, SKIP_VIDEOS_Y = 262, FRAME_RATE_Y = 322
+    RESET_BINDS, FRAME_RATE, WIDE_VIEWPORT, BINDING_ROW = 1300,
+    MOUSE_SLIDER_Y = 191, CD_TRACKS_Y = 228, SKIP_VIDEOS_Y = 262,
+    FRAME_RATE_Y = 322, WIDE_VIEWPORT_Y = 344,
+    PROVINCE_STOCK_WIDTH = 800, PROVINCE_HEIGHT = 600, PROVINCE_MAX_WIDTH = 2048
 };
 
 static SharedOptions *const shared = (SharedOptions *)0x006c3f00;
@@ -97,7 +99,13 @@ static void *use_title_scroll_settings(void) {
 static void *panel_vtable[6];
 static LONG draft_mouse;
 static unsigned frame_rate, draft_frame_rate;
+static BOOL wide_viewport, draft_wide_viewport;
 static unsigned char frame_rate_button[0xe0] __attribute__((aligned(4)));
+static unsigned char wide_viewport_button[0xe0] __attribute__((aligned(4)));
+
+static const char *wide_viewport_caption(BOOL enabled) {
+    return enabled ? "Wide Viewport: On" : "Wide Viewport: Off";
+}
 
 static unsigned valid_frame_rate(unsigned value) {
     return value == 30 || value == 60 || value == 144 ? value : 0;
@@ -126,6 +134,62 @@ static LONG read_percent(const WCHAR *path, const WCHAR *key) {
     return value >= 25 && value <= 200 ? (LONG)value : 100;
 }
 
+typedef void *(__thiscall *ProvinceModeCtor)(void *, int, int, int);
+
+__declspec(dllexport) void *__cdecl TheocracyProvinceMode(void *mode, int width, int height,
+                                                        int format) {
+    WCHAR path[MAX_PATH];
+    wide_viewport = get_mod_path(path, L"Options.ini") &&
+        GetPrivateProfileIntW(L"Options", L"WideViewport", 0, path) == 1;
+    int screen_height = GetSystemMetrics(SM_CYSCREEN);
+    int screen_width = GetSystemMetrics(SM_CXSCREEN);
+    // The graphics wrapper may already have switched the current display mode.
+    DEVMODEW desktop_mode = {.dmSize = sizeof(desktop_mode)};
+    if (EnumDisplaySettingsW(NULL, ENUM_REGISTRY_SETTINGS, &desktop_mode)) {
+        screen_width = desktop_mode.dmPelsWidth;
+        screen_height = desktop_mode.dmPelsHeight;
+    }
+    int wide_width = screen_height > 0 ? MulDiv(screen_width, height, screen_height) : width;
+    wide_width = (wide_width + 3) & ~3;
+    if (wide_viewport && width == PROVINCE_STOCK_WIDTH && height == PROVINCE_HEIGHT &&
+        wide_width > width && wide_width <= PROVINCE_MAX_WIDTH) {
+        const struct { void *operand; int stock; } layout[] = {
+            {(void *)0x00512394, 800}, // Province root width.
+            {(void *)0x004f955c, 800}, // Full-size province control.
+            {(void *)0x004fa46a, 800}, // Width used when opening/closing the side panel.
+            {(void *)0x004f950d, 640}, // Side panel left edge.
+            {(void *)0x004f9532, 640}, // Viewport width with the side panel open.
+            {(void *)0x004dd46e, 799}, // Right edge, persistent scroll.
+            {(void *)0x004dd4c7, 799}, // Right edge, accelerated scroll.
+        };
+        enum { OPERANDS = sizeof(layout) / sizeof(layout[0]) };
+        DWORD protection[OPERANDS];
+        size_t writable = 0;
+        for (; writable < OPERANDS; ++writable) {
+            int stock;
+            memcpy(&stock, layout[writable].operand, sizeof(stock));
+            if (stock != layout[writable].stock ||
+                !VirtualProtect(layout[writable].operand, sizeof(stock),
+                                PAGE_EXECUTE_READWRITE, &protection[writable])) break;
+        }
+        if (writable == OPERANDS) {
+            for (size_t i = 0; i < OPERANDS; ++i) {
+                int value = layout[i].stock + wide_width - width;
+                memcpy(layout[i].operand, &value, sizeof(value));
+                FlushInstructionCache(GetCurrentProcess(), layout[i].operand, sizeof(value));
+            }
+            width = wide_width;
+        }
+        // Several operands share a page. Restore in reverse order.
+        while (writable > 0) {
+            --writable;
+            DWORD previous;
+            VirtualProtect(layout[writable].operand, sizeof(int), protection[writable], &previous);
+        }
+    }
+    return ((ProvinceModeCtor)0x00494cf0)(mode, width, height, format);
+}
+
 __declspec(dllexport) int __cdecl TheocracyOptions(void) {
     WCHAR path[MAX_PATH];
     if (!get_mod_path(path, L"Options.ini")) return 0;
@@ -143,12 +207,14 @@ static BOOL save_options(void) {
 
     next += wsprintfW(values + next, L"SkipOpeningVideos=%d", !!((ReadGem)0x00451f90)(skip_gem)) + 1;
     next += wsprintfW(values + next, L"FrameRate=%u", draft_frame_rate) + 1;
+    next += wsprintfW(values + next, L"WideViewport=%d", !!draft_wide_viewport) + 1;
     values[next] = 0;
     if (!WritePrivateProfileSectionW(L"Options", values, path)) return FALSE;
     shared->mouse_x_remainder = 0;
     shared->mouse_y_remainder = 0;
     shared->mouse_percent = draft_mouse;
     frame_rate = draft_frame_rate;
+    wide_viewport = draft_wide_viewport;
 
     return TRUE;
 }
@@ -676,6 +742,7 @@ static void * __thiscall destroy_options(void *panel, unsigned flags) {
     for (size_t i = 0; i < binding_count; ++i) ((GameMethod)0x005511a0)(row_buttons[i]);
     ((GameMethod)0x005511a0)(reset_button);
     ((GameMethod)0x005511a0)(frame_rate_button);
+    ((GameMethod)0x005511a0)(wide_viewport_button);
     ((GameMethod)0x005511a0)(page_button);
     ((GameMethod)0x00450a50)(mouse_slider);
     ((GameMethod)0x005511a0)(skip_gem);
@@ -715,6 +782,12 @@ static void __thiscall options_event(void *panel, const GameEvent *event) {
         ((GameMethod)0x0054eec0)(panel);
         return;
     }
+    if (!controls_page && command == WIDE_VIEWPORT) {
+        draft_wide_viewport = !draft_wide_viewport;
+        ((SetPointer)0x00456c20)(wide_viewport_button, wide_viewport_caption(draft_wide_viewport));
+        ((GameMethod)0x0054eec0)(panel);
+        return;
+    }
     if (controls_page && command == RESET_BINDS) {
         for (size_t i = 0; i < binding_count; ++i) bindings[i].draft_code = bindings[i].default_code;
         bindings_dirty = TRUE;
@@ -749,6 +822,7 @@ static void attach_options(void *panel) {
     WCHAR path[MAX_PATH];
     draft_mouse = shared->mouse_percent;
     draft_frame_rate = frame_rate;
+    draft_wide_viewport = wide_viewport;
     BOOL skip = get_mod_path(path, L"Options.ini") &&
         GetPrivateProfileIntW(L"Options", L"SkipOpeningVideos", 0, path) == 1;
     save_failed = FALSE;
@@ -796,6 +870,9 @@ static void attach_options(void *panel) {
     const GameRect frame_rate_bounds = {39, FRAME_RATE_Y, 172, 19};
     register_button(panel, frame_rate_button, &frame_rate_bounds, font,
                     frame_rate_caption(draft_frame_rate), FRAME_RATE);
+    const GameRect wide_viewport_bounds = {39, WIDE_VIEWPORT_Y, 197, 19};
+    register_button(panel, wide_viewport_button, &wide_viewport_bounds, font,
+                    wide_viewport_caption(draft_wide_viewport), WIDE_VIEWPORT);
     const GameRect reset_bounds = {42, -800, 158, 22};
     register_button(panel, reset_button, &reset_bounds, font, "Revert to Default", RESET_BINDS);
     for (size_t i = 0; i < binding_count; ++i) {
@@ -971,7 +1048,7 @@ __declspec(dllexport) void __cdecl TheocracyZoomDraw(
 
     GameRect *rect = (GameRect *)((unsigned char *)viewport + 0x28);
     const GameRect original = *rect;
-    enum { MAX_ZOOM_VIEW_WIDTH = 800 };
+    enum { MAX_ZOOM_VIEW_WIDTH = PROVINCE_MAX_WIDTH };
     ZoomSample horizontal[MAX_ZOOM_VIEW_WIDTH];
     if (original.left < 0 || original.top < 0 ||
         original.width <= 0 || original.height <= 0 ||
@@ -1062,6 +1139,7 @@ __declspec(dllexport) void __cdecl TheocracyZoomDraw(
 static unsigned char *probe_ui;
 static unsigned char *probe_province;
 static BOOL probe_skip_stock_present;
+static volatile BOOL frame_cursor_owned;
 static GamePoint probe_previous, probe_current;
 static LONGLONG probe_snapshot_time, probe_next_present;
 
@@ -1100,16 +1178,38 @@ __declspec(dllexport) void __cdecl TheocracyProbeFlip(void *graphics) {
     if (!probe_skip_stock_present) ((GameMethod)0x0054b4a0)(graphics);
 }
 
+__declspec(dllexport) void __cdecl TheocracyFrameDrawCursor(void *cursor) {
+    if (!probe_skip_stock_present) ((GameMethod)0x00563590)(cursor);
+}
+
+__declspec(dllexport) void __cdecl TheocracyFrameRestoreCursor(void *cursor) {
+    if (!probe_skip_stock_present) ((GameMethod)0x005635d0)(cursor);
+}
+
+static void present_with_cursor(void *engine, void *graphics) {
+    typedef void *(__thiscall *GetObject)(void *);
+    void *manager = ((GetObject)0x004bd0a0)(engine);
+    void *cursor = manager ? ((GetObject)0x00550620)(manager) : NULL;
+    if (cursor) TheocracyFrameDrawCursor(cursor);
+    ((GameMethod)0x0054b4a0)(graphics);
+    if (cursor) TheocracyFrameRestoreCursor(cursor);
+}
+
 static BOOL probe_active(unsigned char *province) {
     void *engine = *(void **)0x006c030c;
     return frame_rate && province && engine && *(void **)(province + 0x40daf) &&
            *(int *)(province + 0x40b17) == 0 && !shared->title_active && !has_modal(engine);
 }
 
+__declspec(dllexport) void __cdecl TheocracyFrameRefreshCursor(void *cursor) {
+    if (!frame_cursor_owned) ((GameMethod)0x00563670)(cursor);
+}
+
 __declspec(dllexport) void __cdecl TheocracyProbePresent(unsigned char *ui) {
     unsigned char *province = *(void **)0x006a42a8;
     BOOL active = probe_active(province);
     if (!active || probe_province != province || probe_ui != ui) {
+        frame_cursor_owned = FALSE;
         probe_next_present = 0;
         probe_province = active ? province : NULL;
         probe_ui = active ? ui : NULL;
@@ -1138,6 +1238,7 @@ __declspec(dllexport) void __cdecl TheocracyProbeWait(unsigned microseconds) {
     Wait native_wait = (Wait)0x0055b9e0;
     unsigned char *province = *(void **)0x006a42a8;
     if (!probe_ui || probe_province != province || !probe_active(province)) {
+        frame_cursor_owned = FALSE;
         probe_next_present = 0;
         probe_visible_province = NULL;
         native_wait(microseconds);
@@ -1153,6 +1254,7 @@ __declspec(dllexport) void __cdecl TheocracyProbeWait(unsigned microseconds) {
     void *root = *(void **)(probe_ui + 0x14);
     void *graphics = ((GetGraphics)0x00485c10)();
     if (!root || !graphics) {
+        frame_cursor_owned = FALSE;
         probe_next_present = 0;
         probe_visible_province = NULL;
         native_wait(microseconds);
@@ -1160,6 +1262,7 @@ __declspec(dllexport) void __cdecl TheocracyProbeWait(unsigned microseconds) {
     }
     if (!probe_next_present || now - probe_next_present >= interval)
         probe_next_present = now + interval;
+    frame_cursor_owned = TRUE;
     while (probe_next_present + guard < deadline) {
         LONGLONG remaining = probe_next_present - probe_clock();
         if (remaining > 0) native_wait((unsigned)(remaining * 1000000 / frequency.QuadPart));
@@ -1167,6 +1270,7 @@ __declspec(dllexport) void __cdecl TheocracyProbeWait(unsigned microseconds) {
         if (deadline - now < guard) break;
         void *surface = ((GetSurface)0x005527b0)(graphics);
         if (!surface) {
+            frame_cursor_owned = FALSE;
             probe_next_present = 0;
             break;
         }
@@ -1175,6 +1279,9 @@ __declspec(dllexport) void __cdecl TheocracyProbeWait(unsigned microseconds) {
         if (elapsed > tick_interval) elapsed = tick_interval;
         GamePoint *camera = (GamePoint *)(province + 0x40da7);
         GamePoint original = *camera;
+        volatile unsigned char *const drawing_frame = (volatile unsigned char *)0x006c0311;
+        const unsigned char previous_drawing_frame = *drawing_frame;
+        *drawing_frame = 1;
         camera->x = probe_interpolate(probe_previous.x, probe_current.x, elapsed, tick_interval);
         camera->y = probe_interpolate(probe_previous.y, probe_current.y, elapsed, tick_interval);
         probe_rendering = TRUE;
@@ -1185,7 +1292,8 @@ __declspec(dllexport) void __cdecl TheocracyProbeWait(unsigned microseconds) {
         probe_visible_camera = *camera;
         *camera = original;
         probe_rendering = FALSE;
-        ((GameMethod)0x0054b4a0)(graphics);
+        present_with_cursor(*(void **)0x006c030c, graphics);
+        *drawing_frame = previous_drawing_frame;
         probe_visible_province = province;
         ++probe_metrics->submitted;
         probe_next_present += interval;

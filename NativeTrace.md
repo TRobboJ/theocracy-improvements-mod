@@ -208,3 +208,60 @@ measured about 142.17 submissions/s while the province tick counter
 measured 11.74 ticks/s. The short run's median horizontal camera step
 was two pixels. The 144 Hz trace counts skipped polling samples using
 the wrapping submission counter. No hardware scanout rate is claimed.
+
+### Software cursor and independent presentation
+
+The stock end-frame path gets the active cursor from the engine's UI
+manager and brackets graphics present with cursor draw at VA 0x00563590
+and buffer restore at VA 0x005635D0. The independent scheduler initially
+called graphics present without that pair. The fix brackets scheduled
+presents with the same cursor calls and suppresses the stock cursor pair
+only when the associated stock present is also suppressed.
+
+The cursor also has an out-of-band front-surface redraw. Its caller at
+VA 0x0054F6A1 invokes 0x00563670 after reading the engine drawing flag
+at 0x006C0311. That path can update the front surface independently of
+scheduled presents. The scheduler now owns cursor composition while
+active, suppresses this front-surface redraw during that time, and sets
+the native drawing flag around its paint and present. Cursor position
+updates still run. The stock immediate redraw resumes in Original mode,
+outside Normal View, and during stock fallback.
+
+The isolated campaign harness detected the stationary software cursor
+in 30 of 30 desktop captures in Original mode. The earlier 60 FPS build
+showed it in 9 of 30 captures. The corrected build showed it in all 30
+captures at each of 30, 60, and 144 FPS. This check samples a stationary
+cursor in Normal View.
+
+### Wide province viewport investigation
+
+The isolated draw experiment expands the Normal View RGB565 scratch
+buffer horizontally by 4/3 while preserving its height. The campaign
+harness reached gameplay and panned successfully. The comparison
+showed additional units and buildings on the left and additional
+terrain on the right. This experiment composites back into the
+existing viewport, so it compresses the wider world horizontally.
+
+The province UI root is created at `0x00512340`. Its constructor
+`0x004F9350` creates the 160-pixel side panel at (640, 30), the
+640 × 546 viewport, and a separate 800 × 546 control. The province
+entry path at `0x004F8D10` stores the viewport returned by
+`0x005122D0` at province +0x40DAF, then activates the screen via
+`0x0054F7F0`. The viewport constructor at `0x004FA400` computes
+an inset using a hardcoded 800; the render width also has live state
+beyond the constructor rectangle.
+
+The province-only screen descriptor comes from `0x00494230`, which
+calls its constructor `0x00494CF0` at `0x00494454` and stores the
+result at `0x006B9E70`. Both campaign and multiplayer province entry
+pass that descriptor to `0x004F8D10`. The CD-check descriptor at
+`0x00471990` is separate and restores the previous screen.
+
+Wide Viewport installs the descriptor width and changes the verified
+viewport, panel, root and right-edge scroll operands together. The
+panel keeps its 160-pixel width. In the isolated campaign at 2560 ×
+1440, the harness measured an 800 × 546 world rectangle with the
+option off and a 1068 × 546 world rectangle with it on. Space opened
+the panel at logical x=640 and x=908 respectively and restored the
+full world width when closed. Both modes passed the straight camera
+pan check.
