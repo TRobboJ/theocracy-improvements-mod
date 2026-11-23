@@ -8,8 +8,8 @@ $game = Join-Path $gameRoot 'theocracy-0.6.85.exe'
 $backup = Join-Path $modRoot 'theocracy-0.6.85.stock.exe'
 $marker = Join-Path $modRoot 'installed.sha256'
 $stockHash = 'D922D2F114B5EF33A1D2B10B5F1EBEBCE2BFC28D9EC933CD8DB4B7F20E1D78E2'
-if ((Split-Path -Leaf $modRoot) -ne 'Marsupials Improvements Mod') {
-    throw 'Keep these files inside the Marsupials Improvements Mod folder under the game folder.'
+if ((Split-Path -Leaf $modRoot) -ne 'Theocracy Improvements Mod') {
+    throw 'Keep these files inside the Theocracy Improvements Mod folder under the game folder.'
 }
 if (Get-Process -Name 'theocracy-0.6.85' -ErrorAction SilentlyContinue) {
     throw 'Close Theocracy before installing or uninstalling.'
@@ -51,4 +51,4 @@ try {
     if (Test-Path -LiteralPath $temp) { Remove-Item -LiteralPath $temp }
 }
 if ($Uninstall) { 'Restored the stock executable.' }
-else { 'Installed Marsupials Improvements Mod.' }
+else { 'Installed Theocracy Improvements Mod.' }

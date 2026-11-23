@@ -567,7 +567,7 @@ static void change_page(void *panel) {
             if (get_mod_path(path, L"ControlsBackground.raw") &&
                 GetFileAttributesW(path) != INVALID_FILE_ATTRIBUTES) {
                 ((LoadGameArt)0x00546cf0)(controls_art,
-                    "Marsupials Improvements Mod/ControlsBackground.raw", 1);
+                    "Theocracy Improvements Mod/ControlsBackground.raw", 1);
                 controls_art_ready = TRUE;
             }
         }

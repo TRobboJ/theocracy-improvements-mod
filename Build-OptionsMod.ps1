@@ -110,7 +110,7 @@ $moduleName = 0x800
 $symbolName = 0x900
 $lookupTable = 0xc00
 $addressTable = 0xc40
-$modulePath = 'Marsupials Improvements Mod\TheocracyOptions.dll'
+$modulePath = 'Theocracy Improvements Mod\TheocracyOptions.dll'
 [Text.Encoding]::ASCII.GetBytes($modulePath).CopyTo($patched, ($raw + $moduleName))
 [Text.Encoding]::ASCII.GetBytes('TheocracyOptions').CopyTo($patched, ($raw + $symbolName + 2))
 $cameraSymbol = 0x960

@@ -1,4 +1,4 @@
-# Marsupials Improvements Mod
+# Theocracy Improvements Mod
 
 This folder is the development source for the Theocracy mod. The
 separate theocracy-harness folder handles isolated tests.
@@ -21,6 +21,6 @@ Copy-Item keybinds.example.cfg build/keybinds.cfg
 
 Point the harness at build with its --package option to stage an
 isolated copy. For a Steam install, keep the DLL, builder, installer
-and asset generator in the game's Marsupials Improvements Mod folder.
+and asset generator in the game's Theocracy Improvements Mod folder.
 Keep your own Options.ini and keybinds.cfg local. The stock executable
 and game assets are supplied by the local game installation.
