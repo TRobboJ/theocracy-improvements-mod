@@ -1,0 +1,9 @@
+/build/
+/Options.ini
+/keybinds.cfg
+/ControlsBackground.raw
+/*.dll
+/*.exe
+/*.lib
+/*.pdb
+/installed.sha256
